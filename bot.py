@@ -42,10 +42,14 @@ class OrderStates(StatesGroup):
 # ==========================================
 
 async def sync_catalog():
-    """Получить список товаров из каталога"""
+    """Получить список товаров PUBG Mobile из каталога"""
     url = f"{API_BASE_URL}/sync"
     headers = {"Authorization": GAMESDROP_TOKEN, "Content-Type": "application/json"}
-    payload = {"limit": 50, "page": 1}
+    payload = {
+        "limit": 50,
+        "page": 1,
+        "search": "PUBG Mobile"  # Ищем только PUBG Mobile
+    }
     
     timeout = aiohttp.ClientTimeout(total=10)
     
@@ -55,7 +59,7 @@ async def sync_catalog():
                 if resp.status == 200:
                     data = await resp.json()
                     rows = data.get("rows", [])
-                    logger.info(f"Загружено {len(rows)} товаров")
+                    logger.info(f"Загружено {len(rows)} товаров PUBG Mobile")
                     return rows
                 else:
                     error_text = await resp.text()
@@ -166,9 +170,9 @@ async def monitor_order(order_id: int, chat_id: int):
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     await message.answer(
-        "👋 Привет! Я бот для пополнения игр.\n\n"
+        "👋 Привет! Я бот для пополнения PUBG Mobile.\n\n"
         "📋 Доступные команды:\n"
-        "/catalog - показать товары\n"
+        "/catalog - показать товары PUBG Mobile\n"
         "/balance - проверить баланс\n"
         "/ping - проверить связь с GamesDrop\n"
         "/debug - полная диагностика API"
@@ -223,10 +227,10 @@ async def debug_api(message: Message):
     # 2. Проверка каталога (POST)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(f"{API_BASE_URL}/sync", headers=headers, json={"limit": 5, "page": 1}) as resp:
+            async with session.post(f"{API_BASE_URL}/sync", headers=headers, json={"limit": 5, "page": 1, "search": "PUBG Mobile"}) as resp:
                 text = await resp.text()
                 await message.answer(
-                    f"**2. Каталог (POST /sync)**\n"
+                    f"**2. Каталог PUBG (POST /sync)**\n"
                     f"Статус: {resp.status}\n"
                     f"Ответ: `{text[:500]}`",
                     parse_mode="Markdown"
@@ -250,12 +254,12 @@ async def debug_api(message: Message):
 
 @dp.message(Command("catalog"))
 async def cmd_catalog(message: Message):
-    await message.answer("🔄 Загружаю каталог...")
+    await message.answer("🔄 Загружаю каталог PUBG Mobile...")
     items = await sync_catalog()
     
     if not items:
         await message.answer(
-            "❌ Каталог пуст или ошибка загрузки.\n\n"
+            "❌ Каталог PUBG Mobile пуст или ошибка загрузки.\n\n"
             "Возможные причины:\n"
             "1. Неверный токен GamesDrop\n"
             "2. У тебя нет доступа к товарам\n"
@@ -265,7 +269,7 @@ async def cmd_catalog(message: Message):
         return
     
     keyboard = []
-    for item in items[:10]:
+    for item in items[:20]:  # Показываем до 20 товаров
         name = item.get("offerGroupName", "Товар")
         price = item.get("price", 0)
         currency = item.get("currency", "USD")
@@ -277,7 +281,7 @@ async def cmd_catalog(message: Message):
     
     keyboard.append([InlineKeyboardButton("🔄 Обновить", callback_data="refresh")])
     await message.answer(
-        "📦 Выбери товар:",
+        "📦 Выбери товар PUBG Mobile:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard)
     )
 
@@ -311,23 +315,21 @@ async def process_buy(callback: CallbackQuery, state: FSMContext):
         offer_name=offer_data.get("offerName")
     )
     
-    await state.set_state(OrderStates.entering_game_id)
-    await callback.message.answer(
-        f"✅ {offer_data.get('offerName')}\n"
-        f"💰 {offer_data.get('price')} {offer_data.get('currency')}\n\n"
-        "Введи свой ID в игре (gameUserId):"
-    )
+    # Проверяем, требуется ли gameUserId
+    if offer_data.get("isRequiredGameUserId", False):
+        await state.set_state(OrderStates.entering_game_id)
+        await callback.message.answer(
+            f"✅ {offer_data.get('offerName')}\n"
+            f"💰 {offer_data.get('price')} {offer_data.get('currency')}\n\n"
+            "Введи свой ID в PUBG Mobile (gameUserId):"
+        )
+    else:
+        # Если ID не требуется (ключ), создаем заказ сразу
+        game_user_id = "123456789"  # Заглушка для ключей
+        await process_order(callback.message, state, offer_id, offer_data.get("price"), game_user_id)
 
-@dp.message(OrderStates.entering_game_id)
-async def process_game_id(message: Message, state: FSMContext):
-    game_user_id = message.text.strip()
-    if not game_user_id.isdigit():
-        await message.answer("❌ ID должен содержать только цифры. Попробуй снова.")
-        return
-    
-    user_data = await state.get_data()
-    offer_id = user_data.get("offer_id")
-    price = user_data.get("price")
+async def process_order(message: Message, state: FSMContext, offer_id: int, price: float, game_user_id: str):
+    """Общая функция создания заказа"""
     transaction_id = f"tg_{message.from_user.id}_{int(time.time())}"
     
     await message.answer("⏳ Создаю заказ...")
@@ -357,6 +359,19 @@ async def process_game_id(message: Message, state: FSMContext):
     
     await state.clear()
 
+@dp.message(OrderStates.entering_game_id)
+async def process_game_id(message: Message, state: FSMContext):
+    game_user_id = message.text.strip()
+    if not game_user_id.isdigit():
+        await message.answer("❌ ID должен содержать только цифры. Попробуй снова.")
+        return
+    
+    user_data = await state.get_data()
+    offer_id = user_data.get("offer_id")
+    price = user_data.get("price")
+    
+    await process_order(message, state, offer_id, price, game_user_id)
+
 @dp.callback_query(F.data == "refresh")
 async def refresh_catalog(callback: CallbackQuery):
     await callback.answer("Обновляю...")
@@ -373,7 +388,7 @@ async def catch_all(message: Message):
         f"⚠️ Неизвестная команда.\n\n"
         f"📋 Доступные команды:\n"
         f"/start - приветствие\n"
-        f"/catalog - показать товары\n"
+        f"/catalog - показать товары PUBG Mobile\n"
         f"/balance - проверить баланс\n"
         f"/ping - проверить связь с GamesDrop\n"
         f"/debug - полная диагностика API"
