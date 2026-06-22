@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import time
-import json
 import aiohttp
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -19,10 +18,7 @@ API_BASE_URL = "https://partner.gamesdrop.io/api/v1/offers"
 # ==========================================
 # НАСТРОЙКА ЛОГИРОВАНИЯ
 # ==========================================
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ==========================================
@@ -38,52 +34,24 @@ class OrderStates(StatesGroup):
     entering_game_id = State()
 
 # ==========================================
+# ТВОИ ТОВАРЫ (ПУБГ МОБАЙЛ)
+# ==========================================
+ITEMS = [
+    {"offer_id": 371, "name": "60 UC", "price": 0.90, "currency": "USD"},
+    {"offer_id": 125, "name": "325 UC", "price": 4.46, "currency": "USD"},
+    {"offer_id": 126, "name": "660 UC", "price": 8.92, "currency": "USD"},
+]
+
+# ==========================================
 # ФУНКЦИИ ДЛЯ РАБОТЫ С API GAMESDROP
 # ==========================================
-
-async def sync_catalog():
-    """Получить список товаров PUBG Mobile из каталога"""
-    url = f"{API_BASE_URL}/sync"
-    headers = {"Authorization": GAMESDROP_TOKEN, "Content-Type": "application/json"}
-    payload = {
-        "limit": 50,
-        "page": 1,
-        "search": "PUBG Mobile"  # Ищем только PUBG Mobile
-    }
-    
-    timeout = aiohttp.ClientTimeout(total=10)
-    
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(url, headers=headers, json=payload) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    rows = data.get("rows", [])
-                    logger.info(f"Загружено {len(rows)} товаров PUBG Mobile")
-                    return rows
-                else:
-                    error_text = await resp.text()
-                    logger.error(f"Ошибка синхронизации: {resp.status} - {error_text}")
-                    return []
-    except asyncio.TimeoutError:
-        logger.error("Таймаут при запросе к API GamesDrop")
-        return []
-    except aiohttp.ClientError as e:
-        logger.error(f"Ошибка соединения: {e}")
-        return []
-    except Exception as e:
-        logger.error(f"Неожиданная ошибка: {e}")
-        return []
 
 async def get_balance():
     """Проверить баланс магазина"""
     url = f"{API_BASE_URL}/balance"
     headers = {"Authorization": GAMESDROP_TOKEN}
-    
-    timeout = aiohttp.ClientTimeout(total=10)
-    
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with aiohttp.ClientSession() as session:
             async with session.get(url, headers=headers) as resp:
                 if resp.status == 200:
                     data = await resp.json()
@@ -103,22 +71,17 @@ async def create_order(offer_id: int, price: float, game_user_id: str, transacti
         "transactionId": transaction_id,
         "customer": {"gameUserId": game_user_id},
         "paymentMethod": "card",
-        "returnUrl": "https://t.me/your_bot_username"
+        "returnUrl": "https://t.me/master_uc_bot"  # Замени на своего бота
     }
     
-    timeout = aiohttp.ClientTimeout(total=15)
-    
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with aiohttp.ClientSession() as session:
             async with session.post(url, headers=headers, json=payload) as resp:
                 if resp.status == 200:
                     return await resp.json()
                 error_text = await resp.text()
                 logger.error(f"Ошибка заказа: {resp.status} - {error_text}")
                 return {"error": f"Status {resp.status}", "detail": error_text}
-    except asyncio.TimeoutError:
-        logger.error("Таймаут при создании заказа")
-        return {"error": "Timeout", "detail": "Сервер не отвечает"}
     except Exception as e:
         logger.error(f"Ошибка при создании заказа: {e}")
         return {"error": "Exception", "detail": str(e)}
@@ -129,10 +92,8 @@ async def check_order_status(order_id: int):
     headers = {"Authorization": GAMESDROP_TOKEN, "Content-Type": "application/json"}
     payload = {"orderId": order_id}
     
-    timeout = aiohttp.ClientTimeout(total=10)
-    
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with aiohttp.ClientSession() as session:
             async with session.post(url, headers=headers, json=payload) as resp:
                 if resp.status == 200:
                     return await resp.json()
@@ -172,29 +133,23 @@ async def cmd_start(message: Message):
     await message.answer(
         "👋 Привет! Я бот для пополнения PUBG Mobile.\n\n"
         "📋 Доступные команды:\n"
-        "/catalog - показать товары PUBG Mobile\n"
+        "/catalog - показать товары\n"
         "/balance - проверить баланс\n"
-        "/ping - проверить связь с GamesDrop\n"
-        "/debug - полная диагностика API"
+        "/ping - проверить связь с GamesDrop"
     )
 
 @dp.message(Command("ping"))
 async def ping_api(message: Message):
-    """Проверка доступности API GamesDrop"""
     await message.answer("🔄 Проверяю связь с GamesDrop...")
     try:
-        timeout = aiohttp.ClientTimeout(total=5)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with aiohttp.ClientSession() as session:
             async with session.get("https://partner.gamesdrop.io") as resp:
                 await message.answer(f"✅ Статус сайта: {resp.status} (OK)")
-    except asyncio.TimeoutError:
-        await message.answer("❌ Таймаут: сайт GamesDrop не отвечает")
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
 
 @dp.message(Command("balance"))
 async def cmd_balance(message: Message):
-    """Проверка баланса"""
     await message.answer("🔄 Проверяю баланс...")
     balance = await get_balance()
     if balance is not None:
@@ -202,86 +157,18 @@ async def cmd_balance(message: Message):
     else:
         await message.answer("❌ Не удалось получить баланс. Проверь токен.")
 
-@dp.message(Command("debug"))
-async def debug_api(message: Message):
-    """Полная диагностика API"""
-    await message.answer("🔄 Запускаю полную диагностику...\n\n")
-    
-    headers = {"Authorization": GAMESDROP_TOKEN, "Content-Type": "application/json"}
-    timeout = aiohttp.ClientTimeout(total=10)
-    
-    # 1. Проверка баланса (GET)
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(f"{API_BASE_URL}/balance", headers=headers) as resp:
-                text = await resp.text()
-                await message.answer(
-                    f"**1. Баланс (GET)**\n"
-                    f"Статус: {resp.status}\n"
-                    f"Ответ: `{text[:200]}`",
-                    parse_mode="Markdown"
-                )
-    except Exception as e:
-        await message.answer(f"❌ Ошибка при запросе баланса: {e}")
-    
-    # 2. Проверка каталога (POST)
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(f"{API_BASE_URL}/sync", headers=headers, json={"limit": 5, "page": 1, "search": "PUBG Mobile"}) as resp:
-                text = await resp.text()
-                await message.answer(
-                    f"**2. Каталог PUBG (POST /sync)**\n"
-                    f"Статус: {resp.status}\n"
-                    f"Ответ: `{text[:500]}`",
-                    parse_mode="Markdown"
-                )
-    except Exception as e:
-        await message.answer(f"❌ Ошибка при запросе каталога: {e}")
-    
-    # 3. Проверка конкретного товара (POST)
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(f"{API_BASE_URL}/find-one", headers=headers, json={"offerId": 999}) as resp:
-                text = await resp.text()
-                await message.answer(
-                    f"**3. Товар 999 (POST /find-one)**\n"
-                    f"Статус: {resp.status}\n"
-                    f"Ответ: `{text[:200]}`",
-                    parse_mode="Markdown"
-                )
-    except Exception as e:
-        await message.answer(f"❌ Ошибка при запросе товара: {e}")
-
 @dp.message(Command("catalog"))
 async def cmd_catalog(message: Message):
-    await message.answer("🔄 Загружаю каталог PUBG Mobile...")
-    items = await sync_catalog()
-    
-    if not items:
-        await message.answer(
-            "❌ Каталог PUBG Mobile пуст или ошибка загрузки.\n\n"
-            "Возможные причины:\n"
-            "1. Неверный токен GamesDrop\n"
-            "2. У тебя нет доступа к товарам\n"
-            "3. Пустой баланс\n\n"
-            "Используй /debug для диагностики."
-        )
-        return
-    
+    """Показать список товаров"""
     keyboard = []
-    for item in items[:20]:  # Показываем до 20 товаров
-        name = item.get("offerGroupName", "Товар")
-        price = item.get("price", 0)
-        currency = item.get("currency", "USD")
-        offer_id = item.get("offerGroupId")
+    for item in ITEMS:
         keyboard.append([InlineKeyboardButton(
-            text=f"{name} - {price} {currency}",
-            callback_data=f"buy_{offer_id}"
+            text=f"{item['name']} - {item['price']} {item['currency']}",
+            callback_data=f"buy_{item['offer_id']}"
         )])
     
-    keyboard.append([InlineKeyboardButton("🔄 Обновить", callback_data="refresh")])
     await message.answer(
-        "📦 Выбери товар PUBG Mobile:",
+        "📦 Выбери товар для PUBG Mobile:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard)
     )
 
@@ -294,42 +181,35 @@ async def process_buy(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     offer_id = int(callback.data.split("_")[1])
     
-    url = f"{API_BASE_URL}/find-one"
-    headers = {"Authorization": GAMESDROP_TOKEN, "Content-Type": "application/json"}
-    
-    try:
-        timeout = aiohttp.ClientTimeout(total=10)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(url, headers=headers, json={"offerId": offer_id}) as resp:
-                if resp.status != 200:
-                    await callback.message.answer("❌ Ошибка получения товара.")
-                    return
-                offer_data = await resp.json()
-    except Exception as e:
-        await callback.message.answer(f"❌ Ошибка: {e}")
+    # Ищем товар в списке
+    item = next((x for x in ITEMS if x["offer_id"] == offer_id), None)
+    if not item:
+        await callback.message.answer("❌ Товар не найден.")
         return
     
     await state.update_data(
         offer_id=offer_id,
-        price=offer_data.get("price"),
-        offer_name=offer_data.get("offerName")
+        price=item["price"],
+        offer_name=item["name"]
     )
     
-    # Проверяем, требуется ли gameUserId
-    if offer_data.get("isRequiredGameUserId", False):
-        await state.set_state(OrderStates.entering_game_id)
-        await callback.message.answer(
-            f"✅ {offer_data.get('offerName')}\n"
-            f"💰 {offer_data.get('price')} {offer_data.get('currency')}\n\n"
-            "Введи свой ID в PUBG Mobile (gameUserId):"
-        )
-    else:
-        # Если ID не требуется (ключ), создаем заказ сразу
-        game_user_id = "123456789"  # Заглушка для ключей
-        await process_order(callback.message, state, offer_id, offer_data.get("price"), game_user_id)
+    await state.set_state(OrderStates.entering_game_id)
+    await callback.message.answer(
+        f"✅ {item['name']}\n"
+        f"💰 {item['price']} {item['currency']}\n\n"
+        "Введи свой ID в PUBG Mobile (gameUserId):"
+    )
 
-async def process_order(message: Message, state: FSMContext, offer_id: int, price: float, game_user_id: str):
-    """Общая функция создания заказа"""
+@dp.message(OrderStates.entering_game_id)
+async def process_game_id(message: Message, state: FSMContext):
+    game_user_id = message.text.strip()
+    if not game_user_id.isdigit():
+        await message.answer("❌ ID должен содержать только цифры. Попробуй снова.")
+        return
+    
+    user_data = await state.get_data()
+    offer_id = user_data.get("offer_id")
+    price = user_data.get("price")
     transaction_id = f"tg_{message.from_user.id}_{int(time.time())}"
     
     await message.answer("⏳ Создаю заказ...")
@@ -359,39 +239,19 @@ async def process_order(message: Message, state: FSMContext, offer_id: int, pric
     
     await state.clear()
 
-@dp.message(OrderStates.entering_game_id)
-async def process_game_id(message: Message, state: FSMContext):
-    game_user_id = message.text.strip()
-    if not game_user_id.isdigit():
-        await message.answer("❌ ID должен содержать только цифры. Попробуй снова.")
-        return
-    
-    user_data = await state.get_data()
-    offer_id = user_data.get("offer_id")
-    price = user_data.get("price")
-    
-    await process_order(message, state, offer_id, price, game_user_id)
-
-@dp.callback_query(F.data == "refresh")
-async def refresh_catalog(callback: CallbackQuery):
-    await callback.answer("Обновляю...")
-    await cmd_catalog(callback.message)
-
 # ==========================================
 # ЛОВУШКА ДЛЯ НЕИЗВЕСТНЫХ КОМАНД
 # ==========================================
 
 @dp.message()
 async def catch_all(message: Message):
-    """Обработчик всех неизвестных сообщений"""
     await message.answer(
         f"⚠️ Неизвестная команда.\n\n"
         f"📋 Доступные команды:\n"
         f"/start - приветствие\n"
-        f"/catalog - показать товары PUBG Mobile\n"
+        f"/catalog - показать товары\n"
         f"/balance - проверить баланс\n"
-        f"/ping - проверить связь с GamesDrop\n"
-        f"/debug - полная диагностика API"
+        f"/ping - проверить связь"
     )
 
 # ==========================================
