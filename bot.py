@@ -9,60 +9,47 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
 # ==========================================
-# КОНФИГУРАЦИЯ (ЗАМЕНИ ТОКЕНЫ!!!)
+# ========== КОНФИГУРАЦИЯ (ЗАМЕНИ!!!) ==========
 # ==========================================
-BOT_TOKEN = "8920475030:AAGXrQmacyPlsuUuO7kM2OK1m7h1JYQ29nc"
-GAMESDROP_TOKEN = "zUFq5AsmGRQDwECpsVmmFMWVRj2RkMBIjOu2ZmuicGtd"
-BOT_USERNAME = "MASTER_UC_BOT"  # Например: PUBGDonateBot (без @)
-API_BASE_URL = "https://partner.gamesdrop.io/api/v1/offers"
+BOT_TOKEN = "8920475030:AAGXrQmacyPlsuUuO7kM2OK1m7h1JYQ29nc"   # Например: 123456:ABC-DEF
+GAMESDROP_TOKEN = "zUFq5AsmGRQDwECpsVmmFMWVRj2RkMBIjOu2ZmuicGtd"      # Например: dropp_abcdef123456
+ADMIN_ID = 5267683182                          # ТВОЙ Telegram ID (узнай у @userinfobot)
+BOT_USERNAME = "master_uc_bot"           # Например: (без @)
 
 # ==========================================
-# НАСТРОЙКА ЛОГИРОВАНИЯ
+# ========== ТОВАРЫ (РЕДАКТИРУЙ ЗДЕСЬ) ==========
+# ==========================================
+ITEMS = [
+    {"id": 371, "name": "60 UC", "price": 0.90, "currency": "$"},
+    {"id": 125, "name": "325 UC", "price": 4.46, "currency": "$"},
+    {"id": 126, "name": "660 UC", "price": 8.92, "currency": "$"},
+]
+
+# ==========================================
+# НАСТРОЙКА ЛОГОВ
 # ==========================================
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ==========================================
-# СОЗДАНИЕ ОБЪЕКТОВ БОТА
+# СОЗДАНИЕ БОТА
 # ==========================================
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 # ==========================================
-# СОСТОЯНИЯ ДЛЯ ДИАЛОГА
+# СОСТОЯНИЯ (для диалога с игроком)
 # ==========================================
 class OrderStates(StatesGroup):
-    waiting_for_uid = State()  # Ожидание UID перед оплатой
+    waiting_for_uid = State()  # Ожидаем, когда игрок введет свой UID
 
 # ==========================================
-# ТВОИ ТОВАРЫ (ПУБГ МОБАЙЛ)
+# ФУНКЦИЯ ЗАПРОСА К API GAMESDROP
 # ==========================================
-ITEMS = [
-    {"offer_id": 371, "name": "60 UC", "price": 0.90, "currency": "USD"},
-    {"offer_id": 125, "name": "325 UC", "price": 4.46, "currency": "USD"},
-    {"offer_id": 126, "name": "660 UC", "price": 8.92, "currency": "USD"},
-]
+API_BASE_URL = "https://partner.gamesdrop.io/api/v1/offers"
 
-# ==========================================
-# ФУНКЦИИ ДЛЯ РАБОТЫ С API GAMESDROP
-# ==========================================
-
-async def get_balance():
-    url = f"{API_BASE_URL}/balance"
-    headers = {"Authorization": GAMESDROP_TOKEN}
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return data.get("balance", 0)
-                return None
-    except Exception as e:
-        logger.error(f"Ошибка при получении баланса: {e}")
-        return None
-
-async def create_order(offer_id: int, price: float, game_user_id: str, transaction_id: str):
-    """Создать заказ с UID"""
+async def create_gamesdrop_order(offer_id: int, price: float, game_user_id: str, transaction_id: str):
+    """Создать заказ в GamesDrop с UID игрока"""
     url = f"{API_BASE_URL}/create-order"
     headers = {"Authorization": GAMESDROP_TOKEN, "Content-Type": "application/json"}
     payload = {
@@ -71,7 +58,7 @@ async def create_order(offer_id: int, price: float, game_user_id: str, transacti
         "transactionId": transaction_id,
         "customer": {
             "gameUserId": game_user_id,
-            "email": "user@example.com"
+            "email": f"user_{game_user_id}@example.com"
         },
         "paymentMethod": "card",
         "returnUrl": f"https://t.me/{BOT_USERNAME}"
@@ -83,13 +70,14 @@ async def create_order(offer_id: int, price: float, game_user_id: str, transacti
                 if resp.status == 200:
                     return await resp.json()
                 error_text = await resp.text()
-                logger.error(f"Ошибка заказа: {resp.status} - {error_text}")
+                logger.error(f"Ошибка GamesDrop: {resp.status} - {error_text}")
                 return {"error": f"Status {resp.status}", "detail": error_text}
     except Exception as e:
-        logger.error(f"Ошибка при создании заказа: {e}")
+        logger.error(f"Ошибка соединения: {e}")
         return {"error": "Exception", "detail": str(e)}
 
 async def check_order_status(order_id: int):
+    """Узнать статус заказа"""
     url = f"{API_BASE_URL}/order-status"
     headers = {"Authorization": GAMESDROP_TOKEN, "Content-Type": "application/json"}
     payload = {"orderId": order_id}
@@ -101,68 +89,19 @@ async def check_order_status(order_id: int):
                     return await resp.json()
                 return None
     except Exception as e:
-        logger.error(f"Ошибка при проверке статуса: {e}")
+        logger.error(f"Ошибка проверки статуса: {e}")
         return None
 
-async def monitor_order(order_id: int, chat_id: int):
-    """Фоновая проверка статуса заказа"""
-    for _ in range(30):
-        await asyncio.sleep(10)
-        status_data = await check_order_status(order_id)
-        if not status_data:
-            continue
-            
-        status = status_data.get("status")
-        if status == "COMPLETED":
-            if status_data.get("isReturnDataForCustomer"):
-                key = status_data.get("key", "Ключ не получен")
-                await bot.send_message(chat_id, f"✅ Заказ выполнен!\n🎁 Твой ключ: `{key}`", parse_mode="Markdown")
-            else:
-                await bot.send_message(chat_id, f"✅ Заказ выполнен! Игровая валюта зачислена.")
-            return
-        elif status in ["CANCELED", "FAILED"]:
-            await bot.send_message(chat_id, f"❌ Заказ отменен. Причина: {status_data.get('message', 'Неизвестно')}")
-            return
-    
-    await bot.send_message(chat_id, "⏳ Время проверки истекло. Проверь статус позже вручную.")
-
 # ==========================================
-# КОМАНДЫ БОТА
+# ========== КОМАНДЫ ДЛЯ ИГРОКА ==========
 # ==========================================
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     await message.answer(
         "👋 Привет! Я бот для пополнения PUBG Mobile.\n\n"
-        "📋 Как это работает:\n"
-        "1. Выбери товар в /catalog\n"
-        "2. Введи свой UID (игровой ID)\n"
-        "3. Оплати по ссылке\n"
-        "4. Валюту зачислят автоматически\n\n"
-        "📋 Доступные команды:\n"
-        "/catalog - показать товары\n"
-        "/balance - проверить баланс\n"
-        "/ping - проверить связь"
+        "📦 Нажми /catalog, чтобы выбрать товар."
     )
-
-@dp.message(Command("ping"))
-async def ping_api(message: Message):
-    await message.answer("🔄 Проверяю связь с GamesDrop...")
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get("https://partner.gamesdrop.io") as resp:
-                await message.answer(f"✅ Статус сайта: {resp.status} (OK)")
-    except Exception as e:
-        await message.answer(f"❌ Ошибка: {e}")
-
-@dp.message(Command("balance"))
-async def cmd_balance(message: Message):
-    await message.answer("🔄 Проверяю баланс...")
-    balance = await get_balance()
-    if balance is not None:
-        await message.answer(f"💰 Текущий баланс: **{balance} USD**", parse_mode="Markdown")
-    else:
-        await message.answer("❌ Не удалось получить баланс. Проверь токен.")
 
 @dp.message(Command("catalog"))
 async def cmd_catalog(message: Message):
@@ -170,109 +109,180 @@ async def cmd_catalog(message: Message):
     for item in ITEMS:
         keyboard.append([InlineKeyboardButton(
             text=f"{item['name']} - {item['price']} {item['currency']}",
-            callback_data=f"buy_{item['offer_id']}"
+            callback_data=f"buy_{item['id']}"
         )])
     
     await message.answer(
-        "📦 Выбери товар для PUBG Mobile:",
+        "📦 Выбери нужный пакет UC:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard)
     )
 
 # ==========================================
-# ОБРАБОТЧИКИ КНОПОК
+# ========== ОБРАБОТЧИК ВЫБОРА ТОВАРА ==========
 # ==========================================
 
 @dp.callback_query(F.data.startswith("buy_"))
 async def process_buy(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
-    offer_id = int(callback.data.split("_")[1])
     
-    item = next((x for x in ITEMS if x["offer_id"] == offer_id), None)
+    # Находим выбранный товар
+    offer_id = int(callback.data.split("_")[1])
+    item = next((x for x in ITEMS if x["id"] == offer_id), None)
+    
     if not item:
         await callback.message.answer("❌ Товар не найден.")
         return
-    
-    # Сохраняем данные о товаре
+
+    # Сохраняем данные о заказе в память
     await state.update_data(
         offer_id=offer_id,
         price=item["price"],
-        offer_name=item["name"]
+        name=item["name"]
     )
     
-    # Переходим в состояние ожидания UID
+    # Просим игрока ввести UID
     await state.set_state(OrderStates.waiting_for_uid)
     await callback.message.answer(
-        f"✅ {item['name']}\n"
-        f"💰 {item['price']} {item['currency']}\n\n"
-        "Введи свой ID в PUBG Mobile (gameUserId):"
+        f"✅ Ты выбрал: {item['name']}\n"
+        f"💰 Цена: {item['price']} {item['currency']}\n\n"
+        "🔢 Введи свой ID в PUBG Mobile (только цифры):"
     )
 
 # ==========================================
-# ОБРАБОТЧИК UID (перед оплатой)
+# ========== ОБРАБОТЧИК ПОЛУЧЕНИЯ UID ==========
 # ==========================================
 
 @dp.message(OrderStates.waiting_for_uid)
-async def process_uid_before_payment(message: Message, state: FSMContext):
+async def process_uid(message: Message, state: FSMContext):
     game_user_id = message.text.strip()
-    if not game_user_id.isdigit():
-        await message.answer("❌ ID должен содержать только цифры. Попробуй снова.")
-        return
     
+    # Простая проверка на цифры
+    if not game_user_id.isdigit():
+        await message.answer("❌ ID должен состоять только из цифр. Попробуй снова.")
+        return
+
+    # Получаем данные о товаре из памяти
     user_data = await state.get_data()
     offer_id = user_data.get("offer_id")
     price = user_data.get("price")
+    item_name = user_data.get("name")
+    
+    # Генерируем уникальный ID заказа
     transaction_id = f"tg_{message.from_user.id}_{int(time.time())}"
     
+    # Отправляем запрос в GamesDrop
     await message.answer("⏳ Создаю заказ...")
-    result = await create_order(offer_id, price, game_user_id, transaction_id)
+    result = await create_gamesdrop_order(offer_id, price, game_user_id, transaction_id)
     
+    # ----- ЕСЛИ ОШИБКА (например, нет баланса) -----
     if "error" in result:
-        await message.answer(f"❌ Ошибка: {result.get('detail', 'Неизвестно')}")
+        await message.answer(
+            f"❌ Техническая ошибка: {result.get('detail', 'Неизвестная')}\n"
+            "Попробуй позже или напиши администратору."
+        )
         await state.clear()
         return
-    
+
+    # ----- ЕСЛИ ВСЁ ХОРОШО -----
     order_id = result.get("orderId")
     payment_url = result.get("paymentUrl")
     
     if payment_url:
+        # 1. Отправляем игроку кнопку на оплату
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💳 Оплатить картой/СБП", url=payment_url)]
+            [InlineKeyboardButton(text="💳 Перейти к оплате", url=payment_url)]
         ])
         await message.answer(
-            f"✅ Заказ {order_id} создан!\n"
-            "Нажми кнопку для оплаты.\n"
-            "⏳ Ссылка действительна 30 мин.\n\n"
-            f"UID: {game_user_id}",
-            reply_markup=keyboard
+            f"✅ Заказ создан!\n"
+            f"Номер заказа: `{order_id}`\n\n"
+            "Нажми кнопку ниже, чтобы оплатить картой или СБП.\n"
+            "⏳ Ссылка активна 30 минут.",
+            reply_markup=keyboard,
+            parse_mode="Markdown"
         )
-        # Запускаем фоновую проверку статуса
-        asyncio.create_task(monitor_order(order_id, message.chat.id))
+        
+        # 2. ОТПРАВЛЯЕМ УВЕДОМЛЕНИЕ АДМИНИСТРАТОРУ (ТЕБЕ!)
+        admin_text = (
+            f"🔔 **НОВЫЙ ЗАКАЗ!**\n\n"
+            f"👤 Игрок: @{message.from_user.username or 'Без юзернейма'}\n"
+            f"🆔 ID игрока: {message.from_user.id}\n"
+            f"📦 Товар: {item_name}\n"
+            f"🔢 UID: {game_user_id}\n"
+            f"💲 Цена: {price} USD\n"
+            f"📋 Номер заказа: {order_id}\n"
+            f"🔗 Ссылка: {payment_url}\n\n"
+            f"Ожидай оплаты от игрока."
+        )
+        await bot.send_message(ADMIN_ID, admin_text, parse_mode="Markdown")
+        
+        # 3. Запускаем фоновую проверку оплаты (на всякий случай)
+        asyncio.create_task(monitor_payment(order_id, message.chat.id, item_name))
+
     else:
-        await message.answer(f"❌ Не удалось получить ссылку на оплату. Заказ {order_id}.")
+        await message.answer("❌ Не удалось получить ссылку на оплату. Попробуй снова.")
     
     await state.clear()
 
 # ==========================================
-# ЛОВУШКА ДЛЯ НЕИЗВЕСТНЫХ КОМАНД
+# ========== ФОНОВАЯ ПРОВЕРКА СТАТУСА ==========
+# ==========================================
+
+async def monitor_payment(order_id: int, chat_id: int, item_name: str):
+    """Проверяем статус заказа каждые 10 секунд (макс 5 минут)"""
+    await asyncio.sleep(5)  # Даем время на открытие ссылки
+    
+    for _ in range(30):  # 30 раз по 10 секунд = 5 минут
+        await asyncio.sleep(10)
+        status_data = await check_order_status(order_id)
+        if not status_data:
+            continue
+        
+        status = status_data.get("status")
+        
+        if status == "COMPLETED":
+            # Уведомляем игрока
+            await bot.send_message(
+                chat_id,
+                f"✅ Поздравляем! Товар '{item_name}' успешно зачислен.\n"
+                "Спасибо за покупку! 🎮"
+            )
+            # Уведомляем админа об успехе
+            await bot.send_message(
+                ADMIN_ID,
+                f"✅ Заказ {order_id} успешно выполнен и оплачен!"
+            )
+            return
+            
+        elif status in ["CANCELED", "FAILED"]:
+            await bot.send_message(
+                chat_id,
+                f"❌ Заказ был отменен. Если ты оплатил, деньги вернутся в течение суток."
+            )
+            return
+    
+    # Если время вышло
+    await bot.send_message(
+        chat_id,
+        "⏳ Время проверки истекло. Если ты оплатил, товар зачислится автоматически в течение часа."
+    )
+
+# ==========================================
+# ========== ЛОВУШКА ДЛЯ НЕИЗВЕСТНЫХ КОМАНД ==========
 # ==========================================
 
 @dp.message()
 async def catch_all(message: Message):
     await message.answer(
-        f"⚠️ Неизвестная команда.\n\n"
-        f"📋 Доступные команды:\n"
-        f"/start - приветствие\n"
-        f"/catalog - показать товары\n"
-        f"/balance - проверить баланс\n"
-        f"/ping - проверить связь"
+        "⚠️ Неизвестная команда.\n"
+        "Используй /start или /catalog."
     )
 
 # ==========================================
-# ЗАПУСК БОТА
+# ========== ЗАПУСК БОТА ==========
 # ==========================================
 
 async def main():
-    logger.info("🚀 Бот запускается...")
+    logger.info("🚀 Новый бот запущен и готов к работе!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
